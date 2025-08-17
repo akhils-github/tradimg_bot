@@ -1,9 +1,21 @@
 import logging
 import requests
 import csv
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 import random
+from dotenv import load_dotenv
+from flask import Flask
+
+
+
+# Load environment variables from .env file
+load_dotenv()
+# Access the BOT_TOKEN from the environment
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+# Flask app to handle port binding
+app = Flask(__name__)
 
 # Enable logging
 logging.basicConfig(
@@ -201,6 +213,11 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Hi {user.full_name}!\n\nPlease choose an option:",
         reply_markup=reply_markup
     )
+# Flask route to handle port binding
+@app.route('/')
+def home():
+    return "Bot is running!"
+
 def main() -> None:
     """Start the bot."""
     application = Application.builder().token(BOT_TOKEN).build()
@@ -208,7 +225,7 @@ def main() -> None:
     # Add handlers for each service and option
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_click))  # Handle the button clicks
-    
+
     # Handle unknown messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
@@ -216,4 +233,12 @@ def main() -> None:
     application.run_polling()
 
 if __name__ == '__main__':
+    # Run both Flask app and Telegram bot
+    from threading import Thread
+
+    # Run Flask in a separate thread to avoid blocking the Telegram bot
+    thread = Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 5000})
+    thread.start()
+
+    # Start the bot
     main()
