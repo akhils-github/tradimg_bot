@@ -1,6 +1,9 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import requests
+import csv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+import random
 
 # Enable logging
 logging.basicConfig(
@@ -10,83 +13,207 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define a token for your bot. Replace 'YOUR_BOT_TOKEN' with your actual bot token.
-# You can get this from BotFather on Telegram.
 BOT_TOKEN = '7642750843:AAF16-J7GXCeSI85-D67y29_es3IhYdCoic'
+
+# --- Data fetching and file saving functions ---
+
+def fetch_groww_mtf_data():
+    """
+    Fetches Margin Trading Facility (MTF) data from Groww API.
+    """
+    base_url = "https://groww.in/v1/api/mtf/approved_mtf_stocks"
+    page = 0
+    limit = 50
+    all_data = []
+
+    while True:
+        params = {
+            "limit": limit,
+            "order": "ASC",
+            "page": page,
+            "query": "",
+            "sort": "COMPANY_NAME"
+        }
+        try:
+            response = requests.get(base_url, params=params)
+            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
+            json_data = response.json()
+            stocks = json_data.get("data", [])
+
+            if not stocks:
+                break
+
+            for stock in stocks:
+                try:
+                    market_cap = stock.get("marketCap", 0.0)
+                    leverage = stock.get("leverage", 0.0)
+
+                    # Skip stocks with zero market cap
+                    if market_cap == 0:
+                        continue
+
+                    all_data.append({
+                        "companyName": stock["companyName"],
+                        "symbolIsin": stock["symbolIsin"],
+                        "leverage": leverage,
+                        "searchId": stock.get("searchId"),
+                    })
+                except KeyError as e:
+                    logger.error(f"Missing key in stock data: {e} for stock: {stock}")
+                    continue
+
+            logger.info(f"Fetched page {page} with {len(stocks)} records")
+            page += 1
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch page {page}: {e}")
+            break
+
+    return all_data
+
+def save_to_csv(data, filename):
+    """
+    Saves a list of dictionaries to a CSV file.
+    """
+    if not data:
+        logger.warning(f"No data to save in {filename}.")
+        return
+
+    fieldnames = data[0].keys()
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
+    logger.info(f"Saved {len(data)} records to {filename}")
 
 # --- Handlers for the commands and messages ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message and a main menu with options."""
-    # Define the keyboard layout
-    keyboard = [['Swing trade'], ['Long Term']]
-
-    # Create the ReplyKeyboardMarkup
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
+    """Sends a list of options with inline buttons."""
     user = update.effective_user
-    await update.message.reply_text(
-        f"Hi {user.full_name}!\nWelcome to the trading bot. Please select an option:",
-        reply_markup=reply_markup
-    )
-
-async def swing_trade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a message and an image for the 'Swing trade' option."""
-    # The URL for a swing trading image.
-    # Replace this with your preferred image URL.
-    image_url = 'https://picsum.photos/600/400'
     
-    # Create a "Back to Menu" button
-    keyboard = [['Back to Menu']]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    # Define inline buttons for the options
+    keyboard = [
+        [InlineKeyboardButton("Swing trade", callback_data='swing_trade')],
+        [InlineKeyboardButton("Long Term", callback_data='long_term')],
+        [InlineKeyboardButton("Download Grow MTF Data", callback_data='download_mtf')],
+        [InlineKeyboardButton("Back to Menu", callback_data='back_to_menu')]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Send the image with a caption
-    await update.message.reply_photo(
-        photo=image_url,
-        caption="Here's some information on Swing Trading. It focuses on taking advantage of short to medium-term price swings in the market.",
-        reply_markup=reply_markup
-    )
-
-async def long_term(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a message for the 'Long Term' option."""
-    # Create a "Back to Menu" button
-    keyboard = [['Back to Menu']]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
+    # Send the message with inline buttons
     await update.message.reply_text(
-        "The 'Long Term' feature is under development. Stay tuned for more updates!",
+        f"Hi {user.full_name}!\n\nPlease choose an option:",
         reply_markup=reply_markup
     )
 
-async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the 'Back to Menu' button click by calling the start function."""
-    await start(update, context)
+# CallbackQueryHandler functions for each option
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles button click events."""
+    query = update.callback_query
+    await query.answer()  # Acknowledge the button click to prevent it from hanging.
+
+    choice = query.data
+
+    # Define the Back to Menu button for every response
+    back_button = InlineKeyboardButton("Back to Menu", callback_data='back_to_menu')
+    back_button_markup = InlineKeyboardMarkup([[back_button]])
+
+    if choice == 'swing_trade':
+        # Send a random chart image or a placeholder image for Swing Trade
+        image_url = f'https://picsum.photos/600/400?random={random.randint(1, 1000)}'  # Random placeholder image
+        await query.edit_message_text(
+            text="Swing Trading focuses on taking advantage of short to medium-term price swings in the market. It’s about buying and holding securities for a few days to a few weeks.",
+            reply_markup=back_button_markup  # Include back button
+        )
+        await query.message.reply_photo(photo=image_url, reply_markup=back_button_markup)
+
+    elif choice == 'long_term':
+        # Send a random chart image or a placeholder image for Long Term
+        image_url = f'https://picsum.photos/600/400?random={random.randint(1, 1000)}'  # Random placeholder image
+        await query.edit_message_text(
+            text="Long Term Investing focuses on buying and holding securities for an extended period, typically several years. It's aimed at capital appreciation and dividends over time.",
+            reply_markup=back_button_markup  # Include back button
+        )
+        await query.message.reply_photo(photo=image_url, reply_markup=back_button_markup)
+
+    elif choice == 'download_mtf':
+        await query.edit_message_text("Fetching data and generating files... this may take a moment.", reply_markup=back_button_markup)
+        
+        # 1. Fetch the data
+        mtf_data = fetch_groww_mtf_data()
+
+        if not mtf_data:
+            await query.edit_message_text("Could not fetch data. Please try again later.", reply_markup=back_button_markup)
+            return
+
+        # 2. Split data based on leverage and save to files
+        leverage_2_to_3 = [stock for stock in mtf_data if 2 <= stock["leverage"] <= 3]
+        leverage_3_to_4 = [stock for stock in mtf_data if 3 <= stock["leverage"] <= 4]
+        
+        file_2_to_3 = "groww_mtf_leverage_2_to_3.csv"
+        file_3_to_4 = "groww_mtf_leverage_3_to_4.csv"
+
+        save_to_csv(leverage_2_to_3, file_2_to_3)
+        save_to_csv(leverage_3_to_4, file_3_to_4)
+
+        # 3. Send the files to the user
+        try:
+            await query.message.reply_document(document=open(file_2_to_3, 'rb'))
+            await query.message.reply_document(document=open(file_3_to_4, 'rb'))
+            await query.message.reply_text("The files have been generated and sent!", reply_markup=back_button_markup)
+        except Exception as e:
+            logger.error(f"Failed to send documents: {e}")
+            await query.message.reply_text("I'm sorry, there was an error sending the files. Please try again.", reply_markup=back_button_markup)
+
+        # 4. Clean up the local files
+        import os
+        if os.path.exists(file_2_to_3):
+            os.remove(file_2_to_3)
+        if os.path.exists(file_3_to_4):
+            os.remove(file_3_to_4)
+
+    elif choice == 'back_to_menu':
+        await back_to_menu(update, context)  # Return to the main menu
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles messages that are not commands or button presses."""
     await update.message.reply_text(
-        "Sorry, I didn't understand that command. Please use the menu or /start to begin."
+        "Sorry, I didn't understand that command. Please choose one of the options from the menu.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Menu", callback_data='back_to_menu')]])  # Always have the Back button
     )
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a list of options with inline buttons."""
+    user = update.effective_user
 
+    # Define inline buttons for the options
+    keyboard = [
+        [InlineKeyboardButton("Swing trade", callback_data='swing_trade')],
+        [InlineKeyboardButton("Long Term", callback_data='long_term')],
+        [InlineKeyboardButton("Download Grow MTF Data", callback_data='download_mtf')],
+        [InlineKeyboardButton("Back to Menu", callback_data='back_to_menu')]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Send the message with inline buttons (use query.message here for button responses)
+    await update.callback_query.message.reply_text(  # Corrected to use callback_query.message
+        f"Hi {user.full_name}!\n\nPlease choose an option:",
+        reply_markup=reply_markup
+    )
 def main() -> None:
     """Start the bot."""
-    # Create the Application and pass it your bot's token.
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # on different commands - add handlers
+    # Add handlers for each service and option
     application.add_handler(CommandHandler("start", start))
-
-    # on non-command i.e Message - echo the message on Telegram
-    application.add_handler(MessageHandler(filters.Regex('^Swing trade$'), swing_trade))
-    application.add_handler(MessageHandler(filters.Regex('^Long Term$'), long_term))
-    application.add_handler(MessageHandler(filters.Regex('^Back to Menu$'), back_to_menu))
+    application.add_handler(CallbackQueryHandler(button_click))  # Handle the button clicks
     
     # Handle unknown messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
-    # Run the bot until you press Ctrl-C or the process receives SIGINT,
-    # SIGTERM or SIGABRT.
+    # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM, or SIGABRT.
     application.run_polling()
-
 
 if __name__ == '__main__':
     main()
