@@ -215,27 +215,11 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def home():
     return "Bot is running!"
 
-def main() -> None:
-    """Start the bot."""
-    application = Application.builder().token(BOT_TOKEN).build()
 
-    # Add handlers for each service and option
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_click))  # Handle the button clicks
-
-    # Handle unknown messages
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
-
-    # Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM, or SIGABRT.
-    application.run_polling()
-
-if __name__ == '__main__':
-    # Run both Flask app and Telegram bot
-    from threading import Thread
-
-    # Run Flask in a separate thread to avoid blocking the Telegram bot
-    thread = Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 5000})
-    thread.start()
-
-    # Start the bot
-    main()
+application = Application.builder().token(BOT_TOKEN).build()
+# Add handlers for each service and option
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(button_click))  # Handle the button clicks
+# Handle unknown messages
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
+# Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM, or SIGABRT.
