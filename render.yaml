@@ -1,0 +1,14 @@
+# This file is a blueprint for your web service on Render.
+# It tells Render how to build and start your application.
+# For more information, see https://render.com/docs/yaml-spec
+services:
+  - type: web
+    name: telegram-bot-menu
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    # The 'secretFile' is an optional feature for storing secrets securely.
+    # You could use this to store your BOT_TOKEN instead of hardcoding it.
+    # secretFile:
+    #   - name: bot_secrets
+    #     path: .env
