@@ -120,7 +120,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles button click events."""
     query = update.callback_query
-    await query.answer()  # Acknowledge the button click to prevent it from hanging.
+    # Try to acknowledge the button click immediately to avoid timeout errors
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"CallbackQuery answer failed: {e}")# Acknowledge the button click to prevent it from hanging.
 
     choice = query.data
 
