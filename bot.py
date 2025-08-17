@@ -24,9 +24,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Define a token for your bot. Replace 'YOUR_BOT_TOKEN' with your actual bot token.
-BOT_TOKEN = '7642750843:AAF16-J7GXCeSI85-D67y29_es3IhYdCoic'
-
 # --- Data fetching and file saving functions ---
 
 def fetch_groww_mtf_data():
