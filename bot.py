@@ -6,7 +6,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 import random
 from dotenv import load_dotenv
-from flask import Flask
 
 
 
@@ -15,7 +14,6 @@ load_dotenv()
 # Access the BOT_TOKEN from the environment
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 # Flask app to handle port binding
-app = Flask(__name__)
 
 # Enable logging
 logging.basicConfig(
@@ -214,16 +212,17 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Hi {user.full_name}!\n\nPlease choose an option:",
         reply_markup=reply_markup
     )
-# Flask route to handle port binding
-@app.route('/')
-def home():
-    return "Bot is running!"
 
 
-application = Application.builder().token(BOT_TOKEN).build()
-# Add handlers for each service and option
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(button_click))  # Handle the button clicks
-# Handle unknown messages
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
-# Run the bot until you press Ctrl-C or the process receives SIGINT, SIGTERM, or SIGABRT.
+# --- Main ---
+if __name__ == "__main__":
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN not found in environment variables")
+
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
+
+    application.run_polling()
