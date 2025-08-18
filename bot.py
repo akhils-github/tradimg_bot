@@ -31,47 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 
-#  Aiohttp Webhook Setup
-async def telegram_webhook_handler(request):
-    """Handle incoming Telegram updates."""
-    # This handler needs access to the 'application' object.
-    # We will get it from the aiohttp application state.
-    app = request.app
-    application = app['bot_app']
 
-    try:
-        data = await request.json()
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return web.Response(text="ok")
-    except Exception as e:
-        logger.error(f"Error handling webhook: {e}")
-        return web.Response(text="error", status=500)
-
-async def main():
-    """Builds and runs the aiohttp server with the Telegram bot application."""
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN not found in environment variables")
-    
-    # 1. Initialize the python-telegram-bot application correctly
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # 2. Add your handlers to the application instance
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_click))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
-
-    # 3. Create the aiohttp application and store the bot application in its state
-    app = web.Application()
-    app['bot_app'] = application
-    app.router.add_post('/webhook', telegram_webhook_handler)
-
-    # 4. Return the configured aiohttp application
-    return app
-
-if __name__ == "__main__":
-    # This is the correct entry point to run the aiohttp server.
-    web.run_app(main())
 # --- Data fetching and file saving functions ---
 
 
@@ -295,3 +255,41 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # ... (your imports and handler functions)
 
+async def telegram_webhook_handler(request):
+    """Handle incoming Telegram updates."""
+    app = request.app
+    application = app['bot_app']
+    # ... (rest of your handler code)
+    
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(text="ok")
+    except Exception as e:
+        logger.error(f"Error handling webhook: {e}")
+        return web.Response(text="error", status=500)
+    
+
+async def main():
+    """Builds and runs the aiohttp server with the Telegram bot application."""
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN not found in environment variables")
+    
+    # Initialize the python-telegram-bot application correctly
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add your handlers. The functions 'start', 'button_click', etc. are now defined above.
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
+
+    # Create the aiohttp application and store the bot application in its state
+    app = web.Application()
+    app['bot_app'] = application
+    app.router.add_post('/webhook', telegram_webhook_handler)
+
+    return app
+
+if __name__ == "__main__":
+    web.run_app(main())
