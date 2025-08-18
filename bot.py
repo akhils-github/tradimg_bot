@@ -263,27 +263,38 @@ async def telegram_webhook_handler(request):
         return web.Response(text="error", status=500)
 
 
-async def main():
-    """Main function to run the aiohttp server."""
-    global application
+# ... (your imports and handler functions)
+
+# Aiohttp Webhook Setup
+async def telegram_webhook_handler(request):
+    # ... (your existing handler code)
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(text="ok")
+    except Exception as e:
+        logger.error(f"Error handling webhook: {e}")
+        return web.Response(text="error", status=500)
+
+# Create the aiohttp application instance directly
+app = web.Application()
+
+# Add your webhook route to the application
+app.router.add_post('/webhook', telegram_webhook_handler)
+
+# Main entry point
+if __name__ == "__main__":
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN not found in environment variables")
-
+    
+    # Initialize the python-telegram-bot application
     application = Application.builder().token(BOT_TOKEN).build()
-
+    
+    # Add your handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_click))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
-    app = web.Application()
-    app.router.add_post("/webhook", telegram_webhook_handler)
-
-    # Set up the runner and start the server
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8000)))
-    await site.start()
-
-
-if __name__ == "__main__":
-    web.run_app(main())
+    # This is the correct way to run the aiohttp application
+    web.run_app(app, host='0.0.0.0', port=int(os.getenv("PORT", 8000)))
