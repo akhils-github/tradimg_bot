@@ -13,9 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the bot code into the container
 COPY . .
 
-# Ensure the .env file is in the container (OR mount it during run)
-# If you don't want to COPY it (for security), you can mount it using a volume during docker run
-# COPY .env .  ← (Uncomment if you want to copy it in)
 
+# Expose the port the app runs on
+EXPOSE 8000
 # Run the bot
 CMD ["python", "bot.py"]
