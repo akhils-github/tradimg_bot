@@ -3,6 +3,7 @@ import requests
 import csv
 import os
 import random
+import asyncio
 from flask import Flask, request
 from dotenv import load_dotenv
 from telegram import (
@@ -35,7 +36,20 @@ logger = logging.getLogger(__name__)
 # Flask App
 app = Flask(__name__)
 
-# --- Groww Data Fetcher ---
+@app.route("/")
+def home():
+    return "Bot is running"
+
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    logger.info(f"Update received: {data}")
+
+    update = Update.de_json(data, application.bot)
+    application.process_update(update)
+    return "ok", 200
+
+
 def fetch_groww_mtf_data():
     base_url = "https://groww.in/v1/api/mtf/approved_mtf_stocks"
     page, limit = 0, 50
@@ -73,7 +87,8 @@ def save_to_csv(data, filename):
         writer.writeheader()
         writer.writerows(data)
 
-async def handle_mtf_download_async(chat_id):
+def handle_mtf_download_sync(chat_id):
+    """Blocking function to fetch data, save CSVs, and send files via Telegram HTTP API."""
     data = fetch_groww_mtf_data()
     if not data:
         requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": "Failed to fetch MTF data."})
@@ -95,7 +110,7 @@ async def handle_mtf_download_async(chat_id):
 
     requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": "MTF files sent!"})
 
-# --- Telegram Bot Handlers ---
+
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     keyboard = [
@@ -107,53 +122,56 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.message:
-        await update.message.reply_text(
-            f"Hi {user.full_name}!\nChoose an option:", reply_markup=reply_markup
-        )
+        await update.message.reply_text(f"Hi {user.full_name}!\nChoose an option:", reply_markup=reply_markup)
     elif update.callback_query:
-        try:
-            await update.callback_query.answer()
-        except Exception:
-            pass
-        await update.callback_query.message.edit_text(
-            f"Hi {user.full_name}!\nChoose an option:", reply_markup=reply_markup
-        )
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(f"Hi {user.full_name}!\nChoose an option:", reply_markup=reply_markup)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_main_menu(update, context)
 
+
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
-    choice = query.data
+    try:
+        await query.answer()
+        choice = query.data
 
-    back_button = InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")
-    back_markup = InlineKeyboardMarkup([[back_button]])
+        back_button = InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")
+        back_markup = InlineKeyboardMarkup([[back_button]])
 
-    if choice == "swing_trade":
-        await query.edit_message_text("Swing Trading: short to medium-term price moves.", reply_markup=back_markup)
-        await query.message.reply_photo(
-            photo=f"https://picsum.photos/600/400?random={random.randint(1,1000)}", reply_markup=back_markup
-        )
+        if choice == "swing_trade":
+            await query.edit_message_text("Swing Trading: short to medium-term price moves.", reply_markup=back_markup)
+            await query.message.reply_photo(
+                photo=f"https://picsum.photos/600/400?random={random.randint(1,1000)}",
+                reply_markup=back_markup,
+            )
 
-    elif choice == "long_term":
-        await query.edit_message_text("Long-Term Investing: buy and hold for years.", reply_markup=back_markup)
-        await query.message.reply_photo(
-            photo=f"https://picsum.photos/600/400?random={random.randint(1,1000)}", reply_markup=back_markup
-        )
+        elif choice == "long_term":
+            await query.edit_message_text("Long-Term Investing: buy and hold for years.", reply_markup=back_markup)
+            await query.message.reply_photo(
+                photo=f"https://picsum.photos/600/400?random={random.randint(1,1000)}",
+                reply_markup=back_markup,
+            )
 
-    elif choice == "download_mtf":
-        await query.edit_message_text("Fetching MTF data...", reply_markup=back_markup)
-        chat_id = query.message.chat.id
-        # Run the blocking download function in a thread to not block event loop
-        import asyncio
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, handle_mtf_download_sync, chat_id)
+        elif choice == "download_mtf":
+            await query.edit_message_text("Fetching MTF data... This may take a while.", reply_markup=back_markup)
+            chat_id = query.message.chat.id
+            # Run the blocking download function in executor to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, handle_mtf_download_sync, chat_id)
 
-    elif choice == "back_to_menu":
-        await send_main_menu(update, context)
+        elif choice == "back_to_menu":
+            await send_main_menu(update, context)
+
+    except Exception as e:
+        logger.error(f"Error in button_click handler: {e}")
+        await query.message.reply_text("Oops! Something went wrong, please try again.")
+
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"Unknown message from {update.effective_user.id}: {update.message.text}")
     await update.message.reply_text(
         "Unknown command. Please use /start or choose from the menu.",
         reply_markup=InlineKeyboardMarkup(
@@ -161,60 +179,15 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ),
     )
 
-# Because handle_mtf_download uses requests.post (sync), wrap it for async call
-def handle_mtf_download_sync(chat_id):
-    data = fetch_groww_mtf_data()
-    if not data:
-        requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": "Failed to fetch MTF data."})
-        return
-
-    leverage_2_to_3 = [d for d in data if 2 <= d["leverage"] <= 3]
-    leverage_3_to_4 = [d for d in data if 3 <= d["leverage"] <= 4]
-
-    file1 = "groww_mtf_leverage_2_to_3.csv"
-    file2 = "groww_mtf_leverage_3_to_4.csv"
-
-    save_to_csv(leverage_2_to_3, file1)
-    save_to_csv(leverage_3_to_4, file2)
-
-    for f in [file1, file2]:
-        with open(f, "rb") as doc:
-            requests.post(SEND_DOCUMENT_URL, data={"chat_id": chat_id}, files={"document": doc})
-        os.remove(f)
-
-    requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": "MTF files sent!"})
-
-# --- Flask webhook route ---
-
-@app.route("/")
-def home():
-    return "Bot is running"
-
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    logger.info(f"Update received: {data}")
-
-    # Parse the update with telegram.ext Application
-    update = Update.de_json(data, application.bot)
-    application.process_update(update)
-
-    return "ok", 200
-
-# --- Main ---
-
-application = Application.builder().token(BOT_TOKEN).build()
-
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(button_click))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
 if __name__ == "__main__":
-    # To use webhook, you must set it via Telegram API separately:
-    # Example:
-    # import requests
-    # webhook_url = f"https://yourdomain.com/webhook/{BOT_TOKEN}"
-    # requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={webhook_url}")
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
-    # Run Flask app, telegram.ext Application is used to process updates inside webhook route
-    app.run(host="0.0.0.0", port=8443)
+    # If you want polling (for testing), uncomment below:
+    # application.run_polling()
+
+    # For webhook, run Flask app:
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
