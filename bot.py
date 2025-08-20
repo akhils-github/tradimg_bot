@@ -39,11 +39,12 @@ def home():
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json()
+    print(data,"datadatadatadatadatadatadatadatadatadatadatadata")
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "").lower()
-
+        print(text,"texttexttexttexttexttexttexttexttexttexttext")
         if "start" in text or "menu" in text:
             send_menu(chat_id)
         elif "mtf" in text or "download" in text:
