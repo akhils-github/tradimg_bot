@@ -36,26 +36,6 @@ app = Flask(__name__)
 def home():
     return "Bot is running"
 
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    print(data,"datadatadatadatadatadatadatadatadatadatadatadata")
-
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "").lower()
-        print(text,"texttexttexttexttexttexttexttexttexttexttext")
-        if "start" in text or "menu" in text:
-            send_menu(chat_id)
-        elif "mtf" in text or "download" in text:
-            handle_mtf_download(chat_id)
-        else:
-            requests.post(
-                TELEGRAM_API_URL,
-                json={"chat_id": chat_id, "text": f"You said: {text}"},
-            )
-
-    return "ok", 200
 
 def send_menu(chat_id):
     keyboard = [
@@ -188,7 +168,16 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [[InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")]]
         )
     )
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    logger.info(f"Update received: {data}")
 
+    # Parse the update with telegram.ext Application
+    update = Update.de_json(data, application.bot)
+    application.process_update(update)
+
+    return "ok", 200
 # --- Main ---
 if __name__ == "__main__":
     if not BOT_TOKEN:
