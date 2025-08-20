@@ -23,7 +23,18 @@ application = Application.builder().token(TOKEN).build()
 # Create an executor for running async functions
 executor = ThreadPoolExecutor()
 
+# Set matplotlib to use Agg backend for server environments
+plt.switch_backend('Agg')
+
 # --- Helper Functions ---
+def main_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("📈 Swing Trade", callback_data="swing")],
+        [InlineKeyboardButton("📊 Long Term Trade", callback_data="longterm")],
+        [InlineKeyboardButton("📥 Download Groww MTF Data", callback_data="download")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def back_to_menu_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="back")]])
 
@@ -73,30 +84,33 @@ def fetch_groww_mtf_data():
             "query": "",
             "sort": "COMPANY_NAME"
         }
-        response = requests.get(base_url, params=params)
-        if response.status_code != 200:
+        try:
+            response = requests.get(base_url, params=params, timeout=10)
+            if response.status_code != 200:
+                break
+
+            json_data = response.json()
+            stocks = json_data.get("data", [])
+
+            if not stocks:
+                break
+
+            for stock in stocks:
+                market_cap = stock.get("marketCap", 0.0)
+                leverage = stock.get("leverage", 0.0)
+                if market_cap == 0:
+                    continue
+
+                all_data.append({
+                    "companyName": stock.get("companyName"),
+                    "symbolIsin": stock.get("symbolIsin"),
+                    "leverage": leverage,
+                    "searchId": stock.get("searchId"),
+                })
+
+            page += 1
+        except requests.RequestException:
             break
-
-        json_data = response.json()
-        stocks = json_data.get("data", [])
-
-        if not stocks:
-            break
-
-        for stock in stocks:
-            market_cap = stock.get("marketCap", 0.0)
-            leverage = stock.get("leverage", 0.0)
-            if market_cap == 0:
-                continue
-
-            all_data.append({
-                "companyName": stock.get("companyName"),
-                "symbolIsin": stock.get("symbolIsin"),
-                "leverage": leverage,
-                "searchId": stock.get("searchId"),
-            })
-
-        page += 1
 
     return all_data
 
@@ -124,48 +138,81 @@ def generate_mtf_csv_files():
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Start command received!")
-    keyboard = [
-        [InlineKeyboardButton("📈 Swing Trade", callback_data="swing")],
-        [InlineKeyboardButton("📊 Long Term Trade", callback_data="longterm")],
-        [InlineKeyboardButton("📥 Download Groww MTF Data", callback_data="download")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Welcome to StockBot! Choose an option:", reply_markup=reply_markup)
+    await update.message.reply_text("Welcome to StockBot! Choose an option:", reply_markup=main_menu_keyboard())
+
+async def show_loading(query, text="Processing your request..."):
+    """Show a loading message"""
+    loading_text = f"⏳ {text}"
+    await query.edit_message_text(loading_text)
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Show loading message
     if query.data == "swing":
+        await show_loading(query, "Generating Swing Trade chart...")
         chart = generate_chart("Swing")
         if chart:
-            await query.edit_message_text(f"Here is your Swing Trade chart:", reply_markup=back_to_menu_keyboard())
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(chart, "rb"))
+            # Send the chart with back button
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id, 
+                photo=open(chart, "rb"),
+                caption="📈 Swing Trade Chart\n\nClick 🔙 to return to menu",
+                reply_markup=back_to_menu_keyboard()
+            )
             os.remove(chart)  # Clean up the generated file
         else:
-            await query.edit_message_text("No data found for the requested stock.", reply_markup=back_to_menu_keyboard())
+            await query.edit_message_text(
+                "❌ No data found for the requested stock.",
+                reply_markup=back_to_menu_keyboard()
+            )
+    
     elif query.data == "longterm":
+        await show_loading(query, "Generating Long Term Trade chart...")
         chart = generate_chart("Long Term")
         if chart:
-            await query.edit_message_text(f"Here is your Long Term Trade chart:", reply_markup=back_to_menu_keyboard())
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(chart, "rb"))
+            # Send the chart with back button
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id, 
+                photo=open(chart, "rb"),
+                caption="📊 Long Term Trade Chart\n\nClick 🔙 to return to menu",
+                reply_markup=back_to_menu_keyboard()
+            )
             os.remove(chart)  # Clean up the generated file
         else:
-            await query.edit_message_text("No data found for the requested stock.", reply_markup=back_to_menu_keyboard())
+            await query.edit_message_text(
+                "❌ No data found for the requested stock.",
+                reply_markup=back_to_menu_keyboard()
+            )
+    
     elif query.data == "download":
+        await show_loading(query, "Fetching Groww MTF data...")
         files = generate_mtf_csv_files()
-        await query.edit_message_text("Here are your Groww MTF files:", reply_markup=back_to_menu_keyboard())
+        
+        # Send files with back button
         for file in files:
-            await context.bot.send_document(chat_id=query.message.chat_id, document=open(file, "rb"))
-            os.remove(file) # Clean up the generated file
+            await context.bot.send_document(
+                chat_id=query.message.chat_id, 
+                document=open(file, "rb"),
+                caption="📥 Groww MTF Data" + ("\n\nClick 🔙 to return to menu" if file == files[-1] else "")
+            )
+            os.remove(file)  # Clean up the generated file
+        
+        # Send back button only after the last file
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="✅ Download complete!",
+            reply_markup=back_to_menu_keyboard()
+        )
+    
     elif query.data == "back":
-        keyboard = [
-            [InlineKeyboardButton("📈 Swing Trade", callback_data="swing")],
-            [InlineKeyboardButton("📊 Long Term Trade", callback_data="longterm")],
-            [InlineKeyboardButton("📥 Download Groww MTF Data", callback_data="download")]
-        ]
-        await query.edit_message_text("Welcome to StockBot! Choose an option:", 
-                                     reply_markup=InlineKeyboardMarkup(keyboard))
+        # Return to main menu by sending a new message
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="Welcome to StockBot! Choose an option:",
+            reply_markup=main_menu_keyboard()
+        )
 
 # --- Register Handlers ---
 application.add_handler(CommandHandler("start", start))
@@ -192,8 +239,7 @@ def webhook():
 
 @app.route("/")
 def index():    
-    print("Bot is running!")
-    return "Bot is running!"
+    return "Bot is running! Visit /set_webhook to configure the webhook."
 
 @app.route("/set_webhook", methods=["GET"])
 def set_webhook():
