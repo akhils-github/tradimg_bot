@@ -10,12 +10,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import tempfile
 
 load_dotenv()
 
 # --- Bot and Flask Setup ---
 TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-app-url.herokuapp.com")  # Default fallback
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-app-url.herokuapp.com")
 
 app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
@@ -39,6 +40,11 @@ def back_to_menu_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="back")]])
 
 def generate_chart(stock_type, symbol="RELIANCE.NS"):
+    # Create a temporary file
+    temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+    filename = temp_file.name
+    temp_file.close()
+    
     # Define time range
     if stock_type.lower() == "swing":
         start_date = datetime.datetime.now() - datetime.timedelta(days=14)
@@ -53,6 +59,7 @@ def generate_chart(stock_type, symbol="RELIANCE.NS"):
     data = yf.download(symbol, start=start_date, end=end_date, interval=interval)
 
     if data.empty:
+        os.unlink(filename)  # Remove the temp file
         return None
 
     # Plot chart
@@ -65,7 +72,6 @@ def generate_chart(stock_type, symbol="RELIANCE.NS"):
     plt.legend()
     plt.tight_layout()
 
-    filename = f"{stock_type.lower()}_{symbol.replace('.', '_')}_chart.png"
     plt.savefig(filename)
     plt.close()
     return filename
@@ -127,8 +133,9 @@ def generate_mtf_csv_files():
     leverage_2_to_3 = [stock for stock in mtf_data if 2 <= stock["leverage"] <= 3]
     leverage_3_to_4 = [stock for stock in mtf_data if 3 <= stock["leverage"] <= 4]
 
-    file1 = "groww_mtf_leverage_2_to_3.csv"
-    file2 = "groww_mtf_leverage_3_to_4.csv"
+    # Create temporary files
+    file1 = tempfile.NamedTemporaryFile(suffix='.csv', delete=False).name
+    file2 = tempfile.NamedTemporaryFile(suffix='.csv', delete=False).name
 
     save_to_csv(leverage_2_to_3, file1)
     save_to_csv(leverage_3_to_4, file2)
@@ -155,13 +162,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chart = generate_chart("Swing")
         if chart:
             # Send the chart with back button
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id, 
-                photo=open(chart, "rb"),
-                caption="📈 Swing Trade Chart\n\nClick 🔙 to return to menu",
-                reply_markup=back_to_menu_keyboard()
-            )
-            os.remove(chart)  # Clean up the generated file
+            with open(chart, "rb") as photo:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id, 
+                    photo=photo,
+                    caption="📈 Swing Trade Chart\n\nClick 🔙 to return to menu",
+                    reply_markup=back_to_menu_keyboard()
+                )
+            os.unlink(chart)  # Clean up the generated file
         else:
             await query.edit_message_text(
                 "❌ No data found for the requested stock.",
@@ -173,13 +181,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chart = generate_chart("Long Term")
         if chart:
             # Send the chart with back button
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id, 
-                photo=open(chart, "rb"),
-                caption="📊 Long Term Trade Chart\n\nClick 🔙 to return to menu",
-                reply_markup=back_to_menu_keyboard()
-            )
-            os.remove(chart)  # Clean up the generated file
+            with open(chart, "rb") as photo:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id, 
+                    photo=photo,
+                    caption="📊 Long Term Trade Chart\n\nClick 🔙 to return to menu",
+                    reply_markup=back_to_menu_keyboard()
+                )
+            os.unlink(chart)  # Clean up the generated file
         else:
             await query.edit_message_text(
                 "❌ No data found for the requested stock.",
@@ -192,12 +201,23 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send files with back button
         for file in files:
-            await context.bot.send_document(
-                chat_id=query.message.chat_id, 
-                document=open(file, "rb"),
-                caption="📥 Groww MTF Data" + ("\n\nClick 🔙 to return to menu" if file == files[-1] else "")
-            )
-            os.remove(file)  # Clean up the generated file
+            try:
+                with open(file, "rb") as doc:
+                    await context.bot.send_document(
+                        chat_id=query.message.chat_id, 
+                        document=doc,
+                        caption="📥 Groww MTF Data" + ("\n\nClick 🔙 to return to menu" if file == files[-1] else "")
+                    )
+            except FileNotFoundError:
+                await query.edit_message_text(
+                    "❌ Error: File not found. Please try again.",
+                    reply_markup=back_to_menu_keyboard()
+                )
+                return
+            finally:
+                # Clean up the file
+                if os.path.exists(file):
+                    os.unlink(file)
         
         # Send back button only after the last file
         await context.bot.send_message(
@@ -268,11 +288,7 @@ def remove_webhook():
         return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == "__main__":
-    # For development, use polling instead of webhooks
-    print("Starting bot with polling...")
-    
-    # Use polling for development (easier than setting up webhooks)
+    # For production with webhooks
     application.run_polling()
-    
-    # For production with webhooks, comment the line above and uncomment below:
-    # app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # port = int(os.environ.get("PORT", 5000))
+    # app.run(debug=False, host="0.0.0.0", port=port)
