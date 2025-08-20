@@ -2,7 +2,14 @@ import logging
 import requests
 import csv
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import random
+from flask import Flask, request
+from dotenv import load_dotenv
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,22 +18,20 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import random
-from dotenv import load_dotenv
-from flask import Flask, request
 
-# Load environment variables from .env file
+# Load environment variables from .env
 load_dotenv()
-# Access the BOT_TOKEN from the environment
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-# Flask app to handle port binding
+SEND_DOCUMENT_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
 
-# Enable logging
+# --- Logging setup ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# --- Flask app ---
 app = Flask(__name__)
 
 
@@ -38,21 +43,54 @@ def home():
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json()
+
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
+        text = data["message"].get("text", "").lower()
 
-        reply = f"You Said: {text}"
-        payload = {"chat_id": chat_id, "text": reply}
-        requests.post(TELEGRAM_API_URL, json=payload)
+        if "mtf" in text or "download" in text:
+            mtf_data = fetch_groww_mtf_data()
+
+            if not mtf_data:
+                requests.post(
+                    TELEGRAM_API_URL,
+                    json={"chat_id": chat_id, "text": "Failed to fetch data."},
+                )
+                return "ok", 200
+
+            leverage_2_to_3 = [s for s in mtf_data if 2 <= s["leverage"] <= 3]
+            leverage_3_to_4 = [s for s in mtf_data if 3 <= s["leverage"] <= 4]
+
+            file_2_to_3 = "groww_mtf_leverage_2_to_3.csv"
+            file_3_to_4 = "groww_mtf_leverage_3_to_4.csv"
+
+            save_to_csv(leverage_2_to_3, file_2_to_3)
+            save_to_csv(leverage_3_to_4, file_3_to_4)
+
+            for file_path in [file_2_to_3, file_3_to_4]:
+                with open(file_path, "rb") as f:
+                    requests.post(
+                        SEND_DOCUMENT_URL,
+                        data={"chat_id": chat_id},
+                        files={"document": f},
+                    )
+
+            reply = "MTF data files sent!"
+            requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": reply})
+
+            # Cleanup
+            os.remove(file_2_to_3)
+            os.remove(file_3_to_4)
+
+        else:
+            reply = f"You said: {text}\nSend 'mtf' to fetch MTF data."
+            requests.post(TELEGRAM_API_URL, json={"chat_id": chat_id, "text": reply})
+
     return "ok", 200
 
 
-# --- Data fetching and file saving functions ---
+# --- Groww MTF Data Fetcher ---
 def fetch_groww_mtf_data():
-    """
-    Fetches Margin Trading Facility (MTF) data from Groww API.
-    """
     base_url = "https://groww.in/v1/api/mtf/approved_mtf_stocks"
     page = 0
     limit = 50
@@ -68,7 +106,7 @@ def fetch_groww_mtf_data():
         }
         try:
             response = requests.get(base_url, params=params)
-            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
+            response.raise_for_status()
             json_data = response.json()
             stocks = json_data.get("data", [])
 
@@ -79,8 +117,6 @@ def fetch_groww_mtf_data():
                 try:
                     market_cap = stock.get("marketCap", 0.0)
                     leverage = stock.get("leverage", 0.0)
-
-                    # Skip stocks with zero market cap
                     if market_cap == 0:
                         continue
 
@@ -93,24 +129,21 @@ def fetch_groww_mtf_data():
                         }
                     )
                 except KeyError as e:
-                    logger.error(f"Missing key in stock data: {e} for stock: {stock}")
+                    logger.error(f"Missing key: {e}")
                     continue
 
-            logger.info(f"Fetched page {page} with {len(stocks)} records")
+            logger.info(f"Fetched page {page} with {len(stocks)} stocks")
             page += 1
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch page {page}: {e}")
+        except requests.RequestException as e:
+            logger.error(f"Request failed: {e}")
             break
 
     return all_data
 
 
 def save_to_csv(data, filename):
-    """
-    Saves a list of dictionaries to a CSV file.
-    """
     if not data:
-        logger.warning(f"No data to save in {filename}.")
+        logger.warning(f"No data to save: {filename}")
         return
 
     fieldnames = data[0].keys()
@@ -121,88 +154,66 @@ def save_to_csv(data, filename):
     logger.info(f"Saved {len(data)} records to {filename}")
 
 
-# --- Handlers for the commands and messages ---
-
+# --- Telegram Bot Handlers ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a list of options with inline buttons."""
     user = update.effective_user
-
-    # Define inline buttons for the options
     keyboard = [
         [InlineKeyboardButton("Swing trade", callback_data="swing_trade")],
         [InlineKeyboardButton("Long Term", callback_data="long_term")],
         [InlineKeyboardButton("Download Grow MTF Data", callback_data="download_mtf")],
         [InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")],
     ]
-
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Send the message with inline buttons
     await update.message.reply_text(
         f"Hi {user.full_name}!\n\nPlease choose an option:", reply_markup=reply_markup
     )
 
 
-# CallbackQueryHandler functions for each option
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles button click events."""
     query = update.callback_query
-    # Try to acknowledge the button click immediately to avoid timeout errors
-    try:
-        await query.answer()
-    except Exception as e:
-        logger.warning(
-            f"CallbackQuery answer failed: {e}"
-        )  # Acknowledge the button click to prevent it from hanging.
-
+    await query.answer()
     choice = query.data
 
-    # Define the Back to Menu button for every response
     back_button = InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")
-    back_button_markup = InlineKeyboardMarkup([[back_button]])
+    back_markup = InlineKeyboardMarkup([[back_button]])
 
     if choice == "swing_trade":
-        # Send a random chart image or a placeholder image for Swing Trade
-        image_url = f"https://picsum.photos/600/400?random={random.randint(1, 1000)}"  # Random placeholder image
         await query.edit_message_text(
-            text="Swing Trading focuses on taking advantage of short to medium-term price swings in the market. It’s about buying and holding securities for a few days to a few weeks.",
-            reply_markup=back_button_markup,  # Include back button
+            "Swing Trading involves short to medium-term price moves.",
+            reply_markup=back_markup,
         )
         await query.message.reply_photo(
-            photo=image_url, reply_markup=back_button_markup
+            photo=f"https://picsum.photos/600/400?random={random.randint(1,999)}",
+            reply_markup=back_markup,
         )
 
     elif choice == "long_term":
-        # Send a random chart image or a placeholder image for Long Term
-        image_url = f"https://picsum.photos/600/400?random={random.randint(1, 1000)}"  # Random placeholder image
         await query.edit_message_text(
-            text="Long Term Investing focuses on buying and holding securities for an extended period, typically several years. It's aimed at capital appreciation and dividends over time.",
-            reply_markup=back_button_markup,  # Include back button
+            "Long-term investing focuses on years of holding assets.",
+            reply_markup=back_markup,
         )
         await query.message.reply_photo(
-            photo=image_url, reply_markup=back_button_markup
+            photo=f"https://picsum.photos/600/400?random={random.randint(1,999)}",
+            reply_markup=back_markup,
         )
 
     elif choice == "download_mtf":
         await query.edit_message_text(
-            "Fetching data and generating files... this may take a moment.",
-            reply_markup=back_button_markup,
+            "Fetching data and generating files... Please wait.",
+            reply_markup=back_markup,
         )
 
-        # 1. Fetch the data
         mtf_data = fetch_groww_mtf_data()
 
         if not mtf_data:
             await query.edit_message_text(
-                "Could not fetch data. Please try again later.",
-                reply_markup=back_button_markup,
+                "Failed to fetch data.", reply_markup=back_markup
             )
             return
 
-        # 2. Split data based on leverage and save to files
-        leverage_2_to_3 = [stock for stock in mtf_data if 2 <= stock["leverage"] <= 3]
-        leverage_3_to_4 = [stock for stock in mtf_data if 3 <= stock["leverage"] <= 4]
+        leverage_2_to_3 = [s for s in mtf_data if 2 <= s["leverage"] <= 3]
+        leverage_3_to_4 = [s for s in mtf_data if 3 <= s["leverage"] <= 4]
 
         file_2_to_3 = "groww_mtf_leverage_2_to_3.csv"
         file_3_to_4 = "groww_mtf_leverage_3_to_4.csv"
@@ -210,60 +221,45 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         save_to_csv(leverage_2_to_3, file_2_to_3)
         save_to_csv(leverage_3_to_4, file_3_to_4)
 
-        # 3. Send the files to the user
         try:
             await query.message.reply_document(document=open(file_2_to_3, "rb"))
             await query.message.reply_document(document=open(file_3_to_4, "rb"))
             await query.message.reply_text(
-                "The files have been generated and sent!",
-                reply_markup=back_button_markup,
+                "Files sent successfully!", reply_markup=back_markup
             )
         except Exception as e:
-            logger.error(f"Failed to send documents: {e}")
+            logger.error(f"Error sending files: {e}")
             await query.message.reply_text(
-                "I'm sorry, there was an error sending the files. Please try again.",
-                reply_markup=back_button_markup,
+                "Error sending files.", reply_markup=back_markup
             )
 
-        # 4. Clean up the local files
-        import os
-
-        if os.path.exists(file_2_to_3):
-            os.remove(file_2_to_3)
-        if os.path.exists(file_3_to_4):
-            os.remove(file_3_to_4)
+        os.remove(file_2_to_3)
+        os.remove(file_3_to_4)
 
     elif choice == "back_to_menu":
-        await back_to_menu(update, context)  # Return to the main menu
+        await back_to_menu(update, context)
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles messages that are not commands or button presses."""
     await update.message.reply_text(
-        "Sorry, I didn't understand that command. Please choose one of the options from the menu.",
+        "Sorry, I didn't understand that.",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")]]
-        ),  # Always have the Back button
+        ),
     )
 
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a list of options with inline buttons."""
     user = update.effective_user
-
-    # Define inline buttons for the options
     keyboard = [
         [InlineKeyboardButton("Swing trade", callback_data="swing_trade")],
         [InlineKeyboardButton("Long Term", callback_data="long_term")],
         [InlineKeyboardButton("Download Grow MTF Data", callback_data="download_mtf")],
         [InlineKeyboardButton("Back to Menu", callback_data="back_to_menu")],
     ]
-
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Send the message with inline buttons (use query.message here for button responses)
-    await update.callback_query.message.reply_text(  # Corrected to use callback_query.message
-        f"Hi {user.full_name}!\n\nPlease choose an option:", reply_markup=reply_markup
+    await update.callback_query.message.reply_text(
+        f"Hi {user.full_name}! Choose an option:", reply_markup=reply_markup
     )
 
 
@@ -273,9 +269,9 @@ if __name__ == "__main__":
         raise ValueError("BOT_TOKEN not found in environment variables")
 
     application = Application.builder().token(BOT_TOKEN).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_click))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
 
+    # For local testing, use polling
     application.run_polling()
