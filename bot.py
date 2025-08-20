@@ -5,10 +5,10 @@ import csv
 import yfinance as yf
 import matplotlib.pyplot as plt
 from flask import Flask, request
-
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
+load_dotenv()
 # --- Bot and Flask Setup ---
 TOKEN = os.getenv("BOT_TOKEN")
 app = Flask(__name__)
