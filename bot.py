@@ -4,15 +4,24 @@ import datetime
 import csv
 import yfinance as yf
 import matplotlib.pyplot as plt
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 load_dotenv()
+
 # --- Bot and Flask Setup ---
 TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-app-url.herokuapp.com")  # Default fallback
+
 app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
+
+# Create an executor for running async functions
+executor = ThreadPoolExecutor()
 
 # --- Helper Functions ---
 def back_to_menu_keyboard():
@@ -114,6 +123,7 @@ def generate_mtf_csv_files():
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("Start command received!")
     keyboard = [
         [InlineKeyboardButton("📈 Swing Trade", callback_data="swing")],
         [InlineKeyboardButton("📊 Long Term Trade", callback_data="longterm")],
@@ -131,6 +141,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chart:
             await query.edit_message_text(f"Here is your Swing Trade chart:", reply_markup=back_to_menu_keyboard())
             await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(chart, "rb"))
+            os.remove(chart)  # Clean up the generated file
         else:
             await query.edit_message_text("No data found for the requested stock.", reply_markup=back_to_menu_keyboard())
     elif query.data == "longterm":
@@ -138,6 +149,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chart:
             await query.edit_message_text(f"Here is your Long Term Trade chart:", reply_markup=back_to_menu_keyboard())
             await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(chart, "rb"))
+            os.remove(chart)  # Clean up the generated file
         else:
             await query.edit_message_text("No data found for the requested stock.", reply_markup=back_to_menu_keyboard())
     elif query.data == "download":
@@ -147,25 +159,74 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(file, "rb"))
             os.remove(file) # Clean up the generated file
     elif query.data == "back":
-        await query.edit_message_text("Welcome to StockBot! Choose an option:", reply_markup=InlineKeyboardMarkup([
+        keyboard = [
             [InlineKeyboardButton("📈 Swing Trade", callback_data="swing")],
             [InlineKeyboardButton("📊 Long Term Trade", callback_data="longterm")],
             [InlineKeyboardButton("📥 Download Groww MTF Data", callback_data="download")]
-        ]))
+        ]
+        await query.edit_message_text("Welcome to StockBot! Choose an option:", 
+                                     reply_markup=InlineKeyboardMarkup(keyboard))
 
 # --- Register Handlers ---
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(handle_button))
 
+# Function to run async code in a thread
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
 # --- Flask Webhook ---
-@app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
-    await application.update_queue.put(Update.de_json(request.get_json(force=True), application.bot))
-    return "ok"
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+def webhook():
+    """Handle incoming updates from Telegram"""
+    try:
+        update = Update.de_json(request.get_json(), application.bot)
+        # Run the async function in a thread
+        executor.submit(run_async, application.process_update(update))
+        return "ok"
+    except Exception as e:
+        print(f"Error processing update: {e}")
+        return "error", 500
 
 @app.route("/")
-def index():
+def index():    
+    print("Bot is running!")
     return "Bot is running!"
 
+@app.route("/set_webhook", methods=["GET"])
+def set_webhook():
+    """Set webhook for Telegram bot"""
+    try:
+        # Set webhook
+        url = f"{WEBHOOK_URL}/webhook/{TOKEN}"
+        result = run_async(application.bot.set_webhook(url))
+        if result:
+            return jsonify({"status": "success", "message": f"Webhook set to {url}"})
+        else:
+            return jsonify({"status": "error", "message": "Failed to set webhook"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route("/remove_webhook", methods=["GET"])
+def remove_webhook():
+    """Remove webhook for Telegram bot"""
+    try:
+        result = run_async(application.bot.delete_webhook())
+        if result:
+            return jsonify({"status": "success", "message": "Webhook removed"})
+        else:
+            return jsonify({"status": "error", "message": "Failed to remove webhook"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 if __name__ == "__main__":
-    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
+    # For development, use polling instead of webhooks
+    print("Starting bot with polling...")
+    
+    # Use polling for development (easier than setting up webhooks)
+    application.run_polling()
+    
+    # For production with webhooks, comment the line above and uncomment below:
+    # app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
